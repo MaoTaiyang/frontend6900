@@ -394,7 +394,7 @@
 //   @override
 //   bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
 // }
-
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 import 'dart:io';
@@ -422,16 +422,56 @@ class _VideoWithOverlayPageState extends State<VideoWithOverlayPage> {
   double skeletonFPS = 30.0; // 骨架帧率
   bool showOverlay = true;
   double playbackSpeed = 1.0;
+  // 添加这两个变量
+  late Ticker _ticker; // 用于控制骨架同步的 Ticker
+  int _lastFrameIndex = -1; // 记录上一次绘制的帧索引
 
   @override
   void initState() {
     super.initState();
     _initializeVideo();
     _loadSkeletonData();
-    _videoController.addListener(() {
-      // 每帧变化时刷新
+
+    // 初始化 Ticker
+    _ticker = Ticker((elapsed) {
       if (_videoController.value.isPlaying) {
-        setState(() {});
+        double effectiveFrameDuration =
+            (1000 / skeletonFPS) / playbackSpeed; // 动态调整帧间隔
+        int frameIndex = (_videoController.value.position.inMilliseconds /
+                    effectiveFrameDuration)
+                .round() %
+            _skeletonData.length;
+
+        // 限制仅在帧索引变化时刷新
+        if (frameIndex != _lastFrameIndex) {
+          _lastFrameIndex = frameIndex; // 更新上一次的帧索引
+          setState(() {
+            print(
+                "限制刷新 -> 当前播放时间: ${_videoController.value.position.inMilliseconds}ms, 当前骨架帧索引: $frameIndex");
+          });
+        }
+      }
+    });
+
+    // 启动 Ticker
+    _ticker.start();
+  }
+
+  void _startSkeletonSync() {
+    _videoController.addListener(() {
+      if (_videoController.value.isPlaying) {
+        setState(() {
+          double effectiveFrameDuration =
+              (1000 / skeletonFPS) / playbackSpeed; // 根据倍速动态调整帧间隔
+          int frameIndex = (_videoController.value.position.inMilliseconds /
+                      effectiveFrameDuration)
+                  .round() %
+              _skeletonData.length;
+
+          // 骨架绘制的当前帧索引更新
+          print(
+              "同步逻辑 -> 当前播放时间: ${_videoController.value.position.inMilliseconds}ms, 当前骨架帧索引: $frameIndex");
+        });
       }
     });
   }
@@ -486,6 +526,7 @@ class _VideoWithOverlayPageState extends State<VideoWithOverlayPage> {
 
   @override
   void dispose() {
+    _ticker.dispose();
     _videoController.dispose();
     super.dispose();
   }
@@ -514,11 +555,12 @@ class _VideoWithOverlayPageState extends State<VideoWithOverlayPage> {
         (skeletonFPS > 0 && skeletonFPS.isFinite) ? skeletonFPS : 30.0; // 默认值
 
     // 计算当前帧索引
-    int frameIndex = _videoController.value.isInitialized
-        ? ((_videoController.value.position.inMilliseconds ~/
-                (1000 / skeletonFPS)) %
-            (_skeletonData.isEmpty ? 1 : _skeletonData.length))
-        : 0;
+    double effectiveFrameDuration =
+        (1000 / skeletonFPS) / playbackSpeed; // 动态帧间隔
+    int frameIndex = ((_videoController.value.position.inMilliseconds /
+                effectiveFrameDuration)
+            .round()) %
+        _skeletonData.length;
 // 打印调试信息
     print("当前帧索引: $frameIndex, 骨架数据总帧数: ${_skeletonData.length}");
     return Scaffold(
