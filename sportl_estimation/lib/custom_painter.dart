@@ -3,11 +3,13 @@ import 'package:flutter/material.dart';
 class SkeletonOverlayPainter extends CustomPainter {
   final List<dynamic> skeletonData;
   final int frameIndex;
+  final Size videoSize; // 新增参数
   final bool showCoords; // 是否显示坐标
 
   SkeletonOverlayPainter({
     required this.skeletonData,
     required this.frameIndex,
+    required this.videoSize, // 新增构造函数参数
     this.showCoords = false,
   });
 
@@ -25,11 +27,11 @@ class SkeletonOverlayPainter extends CustomPainter {
           double confidence = keypoints[i + 2];
 
           if (confidence > 0.5) {
-            // Transform coordinates based on video size
-            double nx = x * size.width / 640; // Assuming original width is 640
-            double ny =
-                y * size.height / 480; // Assuming original height is 480
-
+            // 计算缩放比例
+            double xScale = size.width / videoSize.width; // 使用真实视频宽度
+            double yScale = size.height / videoSize.height; // 使用真实视频高度
+            double nx = x * xScale;
+            double ny = y * yScale;
             // Draw keypoints
             canvas.drawCircle(Offset(nx, ny), 3, Paint()..color = Colors.red);
 
@@ -59,19 +61,27 @@ class SkeletonOverlayPainter extends CustomPainter {
       ..color = Colors.green
       ..strokeWidth = 2;
 
-    List<List<int>> connections = [
-      [0, 1], [1, 2], [2, 3], [3, 4], // Example connections
-      // Add all connections here based on keypoints order
+    final List<List<int>> Connections = [
+      [0, 1], [1, 2], [2, 3], [3, 4], // 上半身右侧
+      [1, 5], [5, 6], [6, 7], // 上半身左侧
+      [1, 8], [8, 9], [9, 10], // 右腿
+      [1, 11], [11, 12], [12, 13], // 左腿
+      [0, 14], [14, 16], // 右眼到右耳
+      [0, 15], [15, 17], // 左眼到左耳
+      [8, 11], // 骨盆连接
+      [8, 24], [11, 24], [24, 1], // 骨盆中心与左右臀部及脖子的连接
+      [20, 21], [22, 23], // 左右脚
+      [10, 22], [13, 20] // 脚部连接
     ];
 
-    for (var link in connections) {
+    for (var link in Connections) {
       int start = link[0] * 3;
       int end = link[1] * 3;
       if (keypoints[start + 2] > 0.5 && keypoints[end + 2] > 0.5) {
-        double sx = keypoints[start] * size.width / 640;
-        double sy = keypoints[start + 1] * size.height / 480;
-        double ex = keypoints[end] * size.width / 640;
-        double ey = keypoints[end + 1] * size.height / 480;
+        double sx = keypoints[start] * size.width / videoSize.width;
+        double sy = keypoints[start + 1] * size.height / videoSize.height;
+        double ex = keypoints[end] * size.width / videoSize.width;
+        double ey = keypoints[end + 1] * size.height / videoSize.height;
         canvas.drawLine(Offset(sx, sy), Offset(ex, ey), paint);
       }
     }
