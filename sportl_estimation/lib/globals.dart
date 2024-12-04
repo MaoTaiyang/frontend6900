@@ -1,5 +1,3 @@
-import 'dart:io';
-
 class VideoItem {
   final String uploadTime;
   final String videoUrl; // 视频 HTTP URL

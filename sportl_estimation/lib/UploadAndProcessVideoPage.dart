@@ -39,7 +39,8 @@ Future<bool> uploadAndProcessVideo(File videoFile) async {
     // 将邮箱作为 username 字段传递给后端
     request.fields['username'] = username;
 
-    var streamedResponse = await request.send().timeout(Duration(seconds: 900));
+    var streamedResponse =
+        await request.send().timeout(const Duration(seconds: 900));
     var response = await http.Response.fromStream(streamedResponse);
 
     if (response.statusCode == 200) {
@@ -64,7 +65,7 @@ Future<bool> uploadAndProcessVideo(File videoFile) async {
 }
 
 class UploadAndProcessVideoPage extends StatefulWidget {
-  const UploadAndProcessVideoPage({Key? key}) : super(key: key);
+  const UploadAndProcessVideoPage({super.key});
 
   @override
   _UploadAndProcessVideoPageState createState() =>

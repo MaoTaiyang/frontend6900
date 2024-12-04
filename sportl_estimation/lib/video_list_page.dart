@@ -7,7 +7,7 @@ import 'dart:io';
 import 'package:firebase_auth/firebase_auth.dart';
 
 class VideoListPage extends StatefulWidget {
-  const VideoListPage({Key? key}) : super(key: key);
+  const VideoListPage({super.key});
 
   @override
   _VideoListPageState createState() => _VideoListPageState();
@@ -77,10 +77,10 @@ class _VideoListPageState extends State<VideoListPage> {
         globalVideoFiles.remove(video);
       });
       ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text("视频已删除")));
+          .showSnackBar(const SnackBar(content: Text("视频已删除")));
     } else {
       ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text("删除视频失败")));
+          .showSnackBar(const SnackBar(content: Text("删除视频失败")));
     }
   }
 
@@ -119,10 +119,10 @@ class _VideoListPageState extends State<VideoListPage> {
         renameVideoItem(video.videoUrl, newVideoUrl, newJsonFolderPathUrl);
       });
       ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text("视频已重命名")));
+          .showSnackBar(const SnackBar(content: Text("视频已重命名")));
     } else {
       ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text("重命名视频失败")));
+          .showSnackBar(const SnackBar(content: Text("重命名视频失败")));
     }
   }
 
@@ -133,17 +133,17 @@ class _VideoListPageState extends State<VideoListPage> {
       context: context,
       builder: (BuildContext context) {
         return AlertDialog(
-          title: Text("重命名视频"),
+          title: const Text("重命名视频"),
           content: TextField(
             controller: controller,
-            decoration: InputDecoration(labelText: "新视频名称"),
+            decoration: const InputDecoration(labelText: "新视频名称"),
           ),
           actions: [
             TextButton(
               onPressed: () {
                 Navigator.of(context).pop();
               },
-              child: Text("取消"),
+              child: const Text("取消"),
             ),
             TextButton(
               onPressed: () async {
@@ -160,11 +160,11 @@ class _VideoListPageState extends State<VideoListPage> {
                   await renameVideo(video, newFilename);
                 } else {
                   ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text("文件名已存在或无效")),
+                    const SnackBar(content: Text("文件名已存在或无效")),
                   );
                 }
               },
-              child: Text("确认"),
+              child: const Text("确认"),
             ),
           ],
         );

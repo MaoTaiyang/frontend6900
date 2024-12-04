@@ -27,7 +27,8 @@ Future<List<dynamic>?> uploadAndProcessVideo(File videoFile) async {
     request.files
         .add(await http.MultipartFile.fromPath('video', videoFile.path));
 
-    var streamedResponse = await request.send().timeout(Duration(seconds: 900));
+    var streamedResponse =
+        await request.send().timeout(const Duration(seconds: 900));
     var response = await http.Response.fromStream(streamedResponse);
 
     if (response.statusCode == 200) {
