@@ -1,12 +1,15 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
+import 'package:better_player/better_player.dart';
 import 'dart:ui' as ui;
 import 'dart:convert';
 import 'package:path_provider/path_provider.dart';
 import 'package:flutter_ffmpeg/flutter_ffmpeg.dart';
 import 'custom_painter.dart';
 import 'package:http/http.dart' as http;
+import 'package:crypto/crypto.dart'; // 用于 md5 加密
+import 'package:permission_handler/permission_handler.dart';
 
 class VideoWithOverlayPage extends StatefulWidget {
   final String videoUrl;
@@ -29,39 +32,142 @@ class _VideoWithOverlayPageState extends State<VideoWithOverlayPage>
   late final String maskVideoPath;
   bool isGeneratingMask = false;
   bool showMask = true;
-  bool isMaskVideoGenerated = false;
-  double? videoAspectRatio; // 添加一个变量存储视频宽高比
+  double? videoAspectRatio; // 存储原视频宽高比
+  double? maskVideoAspectRatio; // 存储蒙版视频宽高比
+  bool isPlaying = false; // 播放状态
+  double sliderValue = 0.0; // 进度条的值
+  bool isMaskTaskRunning = false; // 用于标记蒙版任务的运行状态
+  final directory = "/data/data/com.example.sport_estimation";
 
   @override
   void initState() {
     super.initState();
-    print("初始化视频控制器...");
-    _initializeVideo().then((_) {
-      print("视频控制器初始化完成");
-      _getMaskVideoPath(widget.videoUrl).then((path) {
-        if (mounted) {
-          setState(() {
-            maskVideoPath = path;
-            print("maskVideoPath 初始化为: $maskVideoPath");
-          });
-        }
-        _checkAndGenerateMaskVideo().then((_) {
-          // 确保蒙版视频进度与原视频同步
-          if (_maskController != null && _maskController!.value.isInitialized) {
-            _maskController!.seekTo(_videoController.value.position);
-            _maskController!
-                .setPlaybackSpeed(_videoController.value.playbackSpeed);
-          }
-        });
-      });
-    });
+
+    _initializeAsync(); // 调用异步方法
     WidgetsBinding.instance.addObserver(this); // 添加生命周期监听
   }
 
+  Future<void> _initializeAsync() async {
+// 初始化视频控制器并等待完成
+    await _initializeVideo();
+
+    if (!_videoController.value.isInitialized) {
+      print("视频控制器初始化失败，停止后续逻辑");
+      return;
+    }
+    print("视频控制器初始化完成");
+
+    // // 检查并申请权限
+    // await initializeApp();
+    // if (!(await Permission.storage.isGranted) ||
+    //     !(Platform.isAndroid &&
+    //         await Permission.manageExternalStorage.isGranted)) {
+    //   print("必要权限未授予，停止后续初始化流程");
+    //   return; // 中断后续逻辑
+    // }
+
+    try {
+      // 获取蒙版路径
+      final path = await _getMaskVideoPath(widget.videoUrl);
+      maskVideoPath = path;
+      print("maskVideoPath 初始化为: $maskVideoPath");
+
+      final maskFile = File(maskVideoPath);
+
+      // 检查是否已有任务正在运行
+      if (isMaskTaskRunning) {
+        print("蒙版任务已在运行，跳过重复执行");
+        return; // 如果任务已运行，直接退出
+      }
+
+      // 设置任务运行状态
+      setState(() {
+        isMaskTaskRunning = true;
+      });
+
+      try {
+        if (maskFile.existsSync()) {
+          print("蒙版视频已存在，加载蒙版视频");
+          await _loadMaskVideo(maskVideoPath);
+        } else {
+          print("蒙版视频不存在，开始生成");
+          await _generateMaskVideo(maskVideoPath);
+          await _loadMaskVideo(maskVideoPath);
+        }
+      } catch (e) {
+        print("蒙版任务失败：$e");
+      } finally {
+        // 重置任务运行状态
+        setState(() {
+          isMaskTaskRunning = false;
+        });
+      }
+    } catch (e) {
+      print("初始化失败：$e");
+    }
+  }
+
   Future<String> _getMaskVideoPath(String videoUrl) async {
-    final directory = await getApplicationDocumentsDirectory();
-    final fileName = videoUrl.hashCode.toString(); // 生成文件名
-    return "${directory.path}/${fileName}_mask.mp4";
+    final directory = "/data/data/com.example.sport_estimation";
+    final Directory dir = Directory(directory);
+
+    print("存储目录路径: ${dir?.path}"); // 打印存储路径
+    // 确保存储目录已存在
+    if (!await dir.exists()) {
+      print("存储目录不存在，开始创建...");
+      await dir.create(recursive: true);
+      print("存储目录已创建: ${dir.path}");
+    } else {
+      print("存储目录已存在: ${dir.path}");
+    }
+
+    // 使用 md5 将 videoUrl 转换为合法文件名
+    final md5Hash = md5.convert(utf8.encode(videoUrl)).toString();
+    // 生成文件路径
+    final filePath = "${dir.path}/${md5Hash}_mask.webm";
+
+    print("存储文件名已创建: ${filePath}");
+    return filePath;
+  }
+
+//监听器
+  void _addVideoControllerListener() {
+    _videoController.addListener(() {
+      // 检查视频是否已初始化
+      if (_videoController.value.isInitialized) {
+        final currentPosition = _videoController.value.position;
+
+        // 同步蒙版视频的播放和进度
+        if (_maskController != null && _maskController!.value.isInitialized) {
+          if (_videoController.value.isPlaying) {
+            // 确保蒙版视频与原视频同步播放
+            if (!_maskController!.value.isPlaying) {
+              _maskController!.play();
+            }
+            _maskController!.seekTo(currentPosition);
+          } else {
+            // 确保蒙版视频与原视频同步暂停
+            if (_maskController!.value.isPlaying) {
+              _maskController!.pause();
+            }
+          }
+
+          // 同步蒙版视频的播放进度
+          _maskController!.seekTo(currentPosition);
+        }
+
+        // 更新UI，包括进度条和播放按钮状态
+        if (mounted) {
+          setState(() {
+            // 更新进度条位置
+            sliderValue = currentPosition.inSeconds.toDouble();
+
+            // 更新播放/暂停按钮状态
+            isPlaying = _videoController.value.isPlaying;
+          });
+        }
+      }
+    });
   }
 
   Future<void> _initializeVideo() async {
@@ -72,23 +178,7 @@ class _VideoWithOverlayPageState extends State<VideoWithOverlayPage>
       _videoController = VideoPlayerController.network(widget.videoUrl);
       print("视频控制器哈希值（初始化阶段）: ${_videoController.hashCode}");
 
-// 添加监听器以检测初始化状态的变化
-      _videoController.addListener(() {
-        if (_videoController.value.isInitialized &&
-            _maskController?.value.isInitialized == true) {
-          print("监听到视频控制器初始化完成");
-          print("监听器中的视频宽度: ${_videoController.value.size.width}");
-          print("监听器中的视频高度: ${_videoController.value.size.height}");
-          final currentPosition = _videoController.value.position;
-          if (!_videoController.value.isPlaying) {
-            _maskController?.seekTo(currentPosition);
-          }
-          if (mounted) {
-            setState(() {}); // 更新界面
-          }
-        }
-      });
-
+      // 等待视频初始化完成
       await _videoController.initialize();
 
       // 分别获取视频的宽度和高度
@@ -99,30 +189,34 @@ class _VideoWithOverlayPageState extends State<VideoWithOverlayPage>
       print("视频宽度1: $videoWidth");
       print("视频高度1: $videoHeight");
 
+      // 检查视频尺寸
       if (videoWidth <= 0 || videoHeight <= 0) {
         print("警告：视频尺寸无效，宽: $videoWidth，高: $videoHeight");
         throw Exception("视频尺寸不可用，请检查视频路径或元数据加载是否成功");
       }
-      videoAspectRatio = _videoController.value.aspectRatio;
-      // 如果蒙版视频已初始化，提前同步播放速度和进度
-      if (_maskController?.value.isInitialized == true &&
-          _videoController.value.isInitialized) {
-        _maskController!.setPlaybackSpeed(_videoController.value.playbackSpeed);
-        _maskController!.seekTo(_videoController.value.position);
-      }
+
+      // 添加监听器
+      _addVideoControllerListener();
+
+      print("视频宽度: $videoWidth, 高度: $videoHeight");
+
+      print("更新视频宽度和高度到状态: 宽: $videoWidth, 高: $videoHeight");
 
       setState(() {}); // 更新 UI
-    } catch (e) {
+    } catch (e, stackTrace) {
       print("视频初始化失败：$e");
+      print("错误堆栈：$stackTrace");
       setState(() {
         isGeneratingMask = false; // 停止加载提示
       });
     }
   }
 
+//骨架数据下载
   Future<List<dynamic>?> _downloadSkeletonData() async {
     try {
       // 发起 HTTP 请求
+      print("获取骨架信息。");
       final response = await http.get(Uri.parse(widget.jsonFolderPathUrl));
       print("Skeleton Data Response: ${response.body}"); // 打印返回的数据
 
@@ -156,93 +250,199 @@ class _VideoWithOverlayPageState extends State<VideoWithOverlayPage>
       print("视频控制器哈希值（初始化阶段）: ${_videoController.hashCode}");
       print("当前视频宽度: ${_videoController.value.size.width}");
       print("当前视频高度: ${_videoController.value.size.height}");
-      if (_maskController != null) {
-        print("蒙版控制器是否初始化: ${_maskController!.value.isInitialized}");
-      }
+
       if (!_videoController.value.isInitialized ||
-          _videoController.value.size == Size.zero) {
+          _videoController.value.size.width <= 0 ||
+          _videoController.value.size.height <= 0) {
         print("错误：视频未初始化或尺寸无效，无法生成蒙版");
         return;
       }
+
       // 创建状态文件
       final File incompleteFile = File(outputPath + '.incomplete');
-      await incompleteFile.create(); // 创建标记文件
+      print("标记文件地址: $incompleteFile");
 
-      // Download skeleton data
-      final skeletonData = await _downloadSkeletonData();
-      if (skeletonData == null) {
-        incompleteFile.deleteSync(); // 如果数据无效，删除标记文件
-        return;
-      }
+      final Directory parentDirectory = incompleteFile.parent;
+      print("Incomplete file path: ${incompleteFile.path}");
+      print("Parent directory path: ${parentDirectory.path}");
 
-      // Generate frames and combine to a video
-      final FlutterFFmpeg flutterFFmpeg = FlutterFFmpeg();
-      final directory = await getApplicationDocumentsDirectory();
-      final framePaths = <String>[];
+      // 确保父目录已存在
+      if (!await parentDirectory.exists()) {
+        print("父目录不存在，开始创建...${parentDirectory.path}");
+        await parentDirectory.create(recursive: true).then((_) async {
+          print("父目录已创建: ${parentDirectory.path}");
 
-      // 获取视频宽度和高度
-      final double videoWidth = _videoController.value.size.width;
-      final double videoHeight = _videoController.value.size.height;
+          print("创建标记文件...");
+          await incompleteFile.create(); // 创建标记文件
+          print("标记文件地址: ${incompleteFile.path}");
 
-      // 检查视频尺寸是否有效
-      if (videoWidth <= 0 || videoHeight <= 0) {
-        throw Exception("视频尺寸不可用，宽: $videoWidth，高: $videoHeight");
-      }
+          // 下载骨架数据
+          final skeletonData = await _downloadSkeletonData();
+          if (skeletonData == null || skeletonData.isEmpty) {
+            print("骨架数据无效，删除标记文件并终止生成任务");
+            await incompleteFile.delete(); // 删除标记文件
+            return;
+          }
 
-      for (int i = 0; i < skeletonData.length; i++) {
-        // 检查视频尺寸是否有效
+          // 获取视频宽度和高度
+          final double videoWidth = _videoController.value.size.width;
+          final double videoHeight = _videoController.value.size.height;
 
-        final recorder = ui.PictureRecorder();
-        final canvas = Canvas(recorder);
+          // 检查视频尺寸是否有效
+          if (videoWidth <= 0 || videoHeight <= 0) {
+            throw Exception("视频尺寸不可用，宽: $videoWidth，高: $videoHeight");
+          }
 
-        // 创建 SkeletonOverlayPainter 实例
-        final painter = SkeletonOverlayPainter(
-          skeletonData: skeletonData,
-          frameIndex: i,
-          videoSize: Size(videoWidth, videoHeight), // 使用视频的尺寸
-        );
-        painter.paint(canvas, Size(videoWidth, videoHeight));
-        final picture = recorder.endRecording();
-        final img = await picture.toImage(
-          videoWidth.toInt(),
-          videoHeight.toInt(),
-        );
+          // 创建帧并合成为视频
+          final FlutterFFmpeg flutterFFmpeg = FlutterFFmpeg();
+          //final directory = await getApplicationDocumentsDirectory();
+          final directory = "/data/data/com.example.sport_estimation";
+          final framePaths = <String>[];
 
-        // 保存帧图像
-        final framePath = "${directory.path}/frame_$i.png";
-        final byteData = await img.toByteData(format: ui.ImageByteFormat.png);
-        final frameFile = File(framePath);
-        await frameFile.writeAsBytes(byteData!.buffer.asUint8List());
-        framePaths.add(framePath);
-      }
+          for (int i = 0; i < skeletonData.length; i++) {
+            final recorder = ui.PictureRecorder();
+            final canvas = Canvas(recorder);
 
-      final framesInput = "${directory.path}/file_input.txt";
-      await File(framesInput).writeAsString(
-        framePaths.map((path) => "file '$path'").join('\n'),
-      );
+            // 创建 SkeletonOverlayPainter 实例
+            final painter = SkeletonOverlayPainter(
+              skeletonData: skeletonData,
+              frameIndex: i,
+              videoSize: Size(videoWidth, videoHeight),
+            );
+            painter.paint(canvas, Size(videoWidth, videoHeight));
+            final picture = recorder.endRecording();
+            final img = await picture.toImage(
+              videoWidth.toInt(),
+              videoHeight.toInt(),
+            );
 
-      await flutterFFmpeg
-          .execute(
-        "-f concat -safe 0 -i $framesInput -r 30 -pix_fmt yuva420p $outputPath",
-      )
-          .then((rc) {
-        print("FFmpeg finished with return code $rc");
-      }).catchError((e) {
-        print("FFmpeg error: $e");
-      });
+            // 保存帧图像
+            final framePath = "${directory}/frame_$i.png";
+            final byteData =
+                await img.toByteData(format: ui.ImageByteFormat.png);
+            final frameFile = File(framePath);
+            await frameFile.writeAsBytes(byteData!.buffer.asUint8List());
+            framePaths.add(framePath);
+          }
 
-      for (final framePath in framePaths) {
-        final file = File(framePath);
-        if (file.existsSync()) {
-          file.deleteSync();
-        } else {
-          print("文件不存在，无法删除: $framePath");
+          final framesInput = "${directory}/file_input.txt";
+          await File(framesInput).writeAsString(
+            framePaths.map((path) => "file '$path'").join('\n'),
+          );
+
+          await flutterFFmpeg
+              .execute(
+            "-f concat -safe 0 -i $framesInput -r 30 -pix_fmt yuva420p $outputPath",
+          )
+              .then((rc) {
+            print("FFmpeg finished with return code $rc");
+            print("蒙版视频生成成功，存储路径: $outputPath");
+          }).catchError((e) {
+            print("FFmpeg error: $e");
+          });
+
+          // 删除临时帧文件
+          for (final framePath in framePaths) {
+            final file = File(framePath);
+            if (file.existsSync()) {
+              file.deleteSync();
+            } else {
+              print("文件不存在，无法删除: $framePath");
+            }
+          }
+
+          // 删除标记文件
+          if (incompleteFile.existsSync()) {
+            await incompleteFile.delete();
+            print("删除生成完成的标记文件: ${incompleteFile.path}");
+          }
+        });
+      } else {
+        print("父目录已存在: ${parentDirectory.path}");
+        // 创建标记文件
+        print("创建标记文件...");
+        await incompleteFile.create();
+        print("标记文件地址: ${incompleteFile.path}");
+
+        // 下载骨架数据
+        final skeletonData = await _downloadSkeletonData();
+        if (skeletonData == null || skeletonData.isEmpty) {
+          print("骨架数据无效，删除标记文件并终止生成任务");
+          await incompleteFile.delete(); // 删除标记文件
+          return;
         }
-      }
 
-      if (incompleteFile.existsSync()) {
-        incompleteFile.deleteSync(); // 清理标记文件
-        print("删除生成完成的标记文件: ${incompleteFile.path}");
+        // 获取视频宽度和高度
+        final double videoWidth = _videoController.value.size.width;
+        final double videoHeight = _videoController.value.size.height;
+
+        // 检查视频尺寸是否有效
+        if (videoWidth <= 0 || videoHeight <= 0) {
+          throw Exception("视频尺寸不可用，宽: $videoWidth，高: $videoHeight");
+        }
+
+        // 创建帧并合成为视频
+        final FlutterFFmpeg flutterFFmpeg = FlutterFFmpeg();
+        //final directory = await getApplicationDocumentsDirectory();
+        final directory = "/data/data/com.example.sport_estimation";
+        final framePaths = <String>[];
+
+        for (int i = 0; i < skeletonData.length; i++) {
+          final recorder = ui.PictureRecorder();
+          final canvas = Canvas(recorder);
+
+          // 创建 SkeletonOverlayPainter 实例
+          final painter = SkeletonOverlayPainter(
+            skeletonData: skeletonData,
+            frameIndex: i,
+            videoSize: Size(videoWidth, videoHeight),
+          );
+          painter.paint(canvas, Size(videoWidth, videoHeight));
+          final picture = recorder.endRecording();
+          final img = await picture.toImage(
+            videoWidth.toInt(),
+            videoHeight.toInt(),
+          );
+
+          // 保存帧图像
+          final framePath = "${directory}/frame_$i.png";
+          final byteData = await img.toByteData(format: ui.ImageByteFormat.png);
+          final frameFile = File(framePath);
+          await frameFile.writeAsBytes(byteData!.buffer.asUint8List());
+          framePaths.add(framePath);
+        }
+
+        final framesInput = "${directory}/file_input.txt";
+        await File(framesInput).writeAsString(
+          framePaths.map((path) => "file '$path'").join('\n'),
+        );
+
+        await flutterFFmpeg
+            .execute(
+          "-f concat -safe 0 -i $framesInput -r 30 -pix_fmt yuva420p $outputPath",
+        )
+            .then((rc) {
+          print("FFmpeg finished with return code $rc");
+          print("蒙版视频生成成功，存储路径: $outputPath");
+        }).catchError((e) {
+          print("FFmpeg error: $e");
+        });
+
+        // 删除临时帧文件
+        for (final framePath in framePaths) {
+          final file = File(framePath);
+          if (file.existsSync()) {
+            file.deleteSync();
+          } else {
+            print("文件不存在，无法删除: $framePath");
+          }
+        }
+        print("删除临时帧文件");
+        // 删除标记文件
+        if (incompleteFile.existsSync()) {
+          await incompleteFile.delete();
+          print("删除生成完成的标记文件: ${incompleteFile.path}");
+        }
       }
     } catch (e) {
       print("蒙版视频生成失败: $e");
@@ -252,29 +452,27 @@ class _VideoWithOverlayPageState extends State<VideoWithOverlayPage>
 
   Future<void> _loadMaskVideo(String path) async {
     final file = File(path);
-    final fileSize = file.lengthSync();
-    if (file.existsSync()) {
-      if (fileSize > 1000) {
-        print("蒙版视频文件存在，大小: $fileSize 字节，路径: $path");
-        // 检查文件是否存在且大小合理
-        if (_maskController == null || !_maskController!.value.isInitialized) {
-          _maskController = VideoPlayerController.file(file);
-          await _maskController!.initialize(); // 使用 await 等待完成
-          // 同步播放速度和进度
-          _maskController!
-              .setPlaybackSpeed(_videoController.value.playbackSpeed);
-          _maskController!.seekTo(_videoController.value.position);
+    final incompleteFile = File(path + '.incomplete'); // 生成标记文件路径
+    if (file.existsSync() && !incompleteFile.existsSync()) {
+      print("蒙版视频文件已生成完成，路径1: $path");
+      // 初始化蒙版视频控制器
+      if (_maskController == null || !_maskController!.value.isInitialized) {
+        _maskController = VideoPlayerController.file(file);
+        await _maskController!.initialize(); // 初始化控制器
+        // 确保蒙版视频控制器也有监听器
+        _addVideoControllerListener();
 
-          if (mounted) {
-            setState(() {}); // 更新界面
-          }
+        if (mounted) {
+          setState(() {}); // 更新界面
         }
-      } else {
-        print("文件大小无效: $fileSize 字节，路径: $path，删除文件");
-        file.deleteSync(); // 删除不完整文件
       }
     } else {
-      print("蒙版视频文件不存在: $path");
+      // 标记文件存在或文件不存在，表示视频未生成完成
+      if (!file.existsSync()) {
+        print("蒙版视频文件不存在: $path");
+      } else if (incompleteFile.existsSync()) {
+        print("检测到未完成的蒙版视频任务，路径: $path");
+      }
     }
   }
 
@@ -285,14 +483,17 @@ class _VideoWithOverlayPageState extends State<VideoWithOverlayPage>
     final File incompleteFile = File(maskVideoPath + '.incomplete');
 
     if (incompleteFile.existsSync()) {
-      print("检测到未完成任务，清理文件: ${incompleteFile.path}");
-      incompleteFile.deleteSync(); // 删除未完成标记文件
+      print("检测到未完成任务，标记文件路径: ${incompleteFile.path}");
 
       final File incompleteVideoFile = File(maskVideoPath);
       if (incompleteVideoFile.existsSync()) {
         incompleteVideoFile.deleteSync(); // 删除未完成的视频文件
         print("清理未完成视频文件: ${incompleteVideoFile.path}");
       }
+
+      // 删除标记文件
+      incompleteFile.deleteSync();
+      print("清理未完成标记文件: ${incompleteFile.path}");
     }
 
     WidgetsBinding.instance.removeObserver(this);
@@ -301,101 +502,11 @@ class _VideoWithOverlayPageState extends State<VideoWithOverlayPage>
     super.dispose();
   }
 
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.paused) {
-      // 应用进入后台时，暂停视频播放
-      _videoController.pause();
-      _maskController?.pause();
-    } else if (state == AppLifecycleState.resumed) {
-      // 应用返回前台时，重新播放视频（根据需求，可省略）
-      _videoController.play();
-      _maskController?.play();
-      // 同步蒙版视频的播放进度
-      _maskController?.seekTo(_videoController.value.position);
-    }
-  }
-
-  Future<void> _checkAndGenerateMaskVideo() async {
-    try {
-      // 如果蒙版视频已经生成并加载过，直接返回
-      if (isMaskVideoGenerated) {
-        print("蒙版视频已生成并加载，无需重复生成");
-        return;
-      }
-
-      // 获取蒙版视频路径
-      final maskVideoPath = await _getMaskVideoPath(widget.videoUrl);
-      final incompleteFile = File(maskVideoPath + '.incomplete');
-      final maskFile = File(maskVideoPath);
-
-      // 检查并删除未完成的标记文件
-      if (incompleteFile.existsSync()) {
-        print("发现未完成的生成任务: ${incompleteFile.path}");
-        incompleteFile.deleteSync(); // 删除未完成标记文件
-
-        if (maskFile.existsSync()) {
-          maskFile.deleteSync(); // 删除不完整视频文件
-          print("删除未完成的视频文件: ${maskFile.path}");
-        }
-      }
-
-      // 检查蒙版视频是否存在且完整
-      if (maskFile.existsSync()) {
-        final fileSize = maskFile.lengthSync();
-        if (fileSize > 100000) {
-          // 根据实际蒙版视频文件大小调整阈值
-          print("蒙版视频文件存在且完整，大小: $fileSize 字节");
-          await _loadMaskVideo(maskVideoPath); // 加载已有蒙版视频
-          setState(() {
-            isMaskVideoGenerated = true; // 设置为已生成状态
-          });
-          return;
-        } else {
-          print("蒙版视频文件不完整，大小: $fileSize 字节，删除...");
-          maskFile.deleteSync(); // 删除不完整文件
-        }
-      }
-
-      // 更新状态为正在生成
-      if (mounted) {
-        setState(() {
-          isGeneratingMask = true;
-        });
-      }
-
-      // 检查视频控制器是否已初始化且尺寸有效
-      if (!_videoController.value.isInitialized ||
-          _videoController.value.size == Size.zero ||
-          _videoController.value.size.width <= 0 ||
-          _videoController.value.size.height <= 0) {
-        print("错误：视频未正确初始化或尺寸无效，无法生成蒙版视频");
-        if (mounted) {
-          setState(() {
-            isGeneratingMask = false; // 更新状态
-          });
-        }
-        return;
-      }
-
-      // 调用生成蒙版视频的方法
-      await _generateMaskVideo(maskVideoPath);
-
-      // 更新状态为完成
-      if (mounted) {
-        setState(() {
-          isGeneratingMask = false;
-          isMaskVideoGenerated = true; // 更新为已生成状态
-        });
-      }
-    } catch (e) {
-      print("检查和生成蒙版视频时发生错误: $e");
-      if (mounted) {
-        setState(() {
-          isGeneratingMask = false; // 确保状态回退
-        });
-      }
-    }
+  String _formatDuration(Duration duration) {
+    String twoDigits(int n) => n.toString().padLeft(2, '0');
+    final minutes = twoDigits(duration.inMinutes.remainder(60));
+    final seconds = twoDigits(duration.inSeconds.remainder(60));
+    return "$minutes:$seconds";
   }
 
   @override
@@ -441,9 +552,47 @@ class _VideoWithOverlayPageState extends State<VideoWithOverlayPage>
             ),
         ],
       ),
-      bottomNavigationBar:
-          _videoController.value.isInitialized && !isGeneratingMask
-              ? Row(
+      bottomNavigationBar: _videoController.value.isInitialized &&
+              !isGeneratingMask
+          ? Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // 第一行：进度条和时间显示
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    // 显示当前时间
+                    Text(
+                      _formatDuration(_videoController.value.position),
+                      style: TextStyle(fontSize: 12),
+                    ),
+                    // 进度条
+                    Expanded(
+                      child: Slider(
+                        value: sliderValue, // 从监听器同步的进度条值
+                        max: _videoController.value.duration.inSeconds
+                            .toDouble(),
+                        onChanged: (value) {
+                          setState(() {
+                            sliderValue = value; // 实时更新进度条值
+                          });
+                        },
+                        onChangeEnd: (value) {
+                          // 滑动结束时更新视频进度
+                          final newDuration = Duration(seconds: value.toInt());
+                          _videoController.seekTo(newDuration);
+                        },
+                      ),
+                    ),
+                    // 显示总时长
+                    Text(
+                      _formatDuration(_videoController.value.duration),
+                      style: TextStyle(fontSize: 12),
+                    ),
+                  ],
+                ),
+                // 第二行：播放按钮、倍速选择和蒙版开关
+                Row(
                   mainAxisAlignment: MainAxisAlignment.spaceAround,
                   children: [
                     IconButton(
@@ -464,12 +613,10 @@ class _VideoWithOverlayPageState extends State<VideoWithOverlayPage>
                               final position = _videoController.value.position;
                               _maskController?.seekTo(position);
                             }
-
                             // 播放两个视频
                             _videoController.play();
                             _maskController?.play();
                           }
-
                           // 切换播放/暂停状态后更新界面
                           setState(() {});
                         }
@@ -503,8 +650,10 @@ class _VideoWithOverlayPageState extends State<VideoWithOverlayPage>
                       },
                     ),
                   ],
-                )
-              : null,
+                ),
+              ],
+            )
+          : null,
     );
   }
 }

@@ -47,6 +47,7 @@ dependencies:
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
   video_player: ^2.9.1
+  better_player: ^0.0.84
   
  
   
